@@ -1,46 +1,4 @@
 #!/usr/bin/env python3
-"""
-run_test.py
-
-Runs a common set of S3 operations against a single S3-compatible endpoint
-(MinIO, SeaweedFS, RustFS, Ceph RGW, Garage, AIStor, ...) and reports which
-operations succeeded, failed, or errored.
-
-This does NOT replace testing against your real internal workflows --
-it validates the underlying S3 API surface that those workflows likely
-depend on (uploads, multipart, presigned URLs, versioning, tagging,
-lifecycle rules, object lock). Use the results as a first-pass signal,
-not a final acceptance test.
-
-USAGE
------
-1. Copy .env.example to .env and fill in the connection details for the
-   endpoint you want to test.
-
-2. Run:
-       pip install boto3 python-dotenv --break-system-packages
-       python3 run_test.py
-
-3. Read the summary table printed at the end. Each row is an operation,
-   with PASS / FAIL / ERROR / SKIP. Full details (exceptions, response
-   snippets) are printed above the table and also written to
-   s3_compat_results.json.
-
-NOTES
------
-- The script creates and deletes its own throwaway bucket (default:
-  "s3-compat-test-<timestamp>"), so it should be safe to run against a
-  live instance, but don't point it at production.
-- Some operations (object lock, bucket replication, notifications) need
-  bucket-level configuration at creation time or extra setup; where an
-  operation legitimately can't be tested generically, it's marked SKIP
-  rather than FAIL.
-- boto3 talks standard AWS S3 API. Path-style addressing is forced on
-  since most self-hosted S3-compatible stores expect it (virtual-hosted
-  style requires DNS wildcard setup that most local/self-hosted setups
-  don't have).
-"""
-
 import json
 import os
 import sys
@@ -56,9 +14,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ---------------------------------------------------------------------------
-# 1. ENDPOINT CONFIG -- read from environment / .env
-# ---------------------------------------------------------------------------
 REQUIRED_VARS = ["S3_ENDPOINT", "S3_ACCESS_KEY", "S3_SECRET_KEY"]
 
 
@@ -81,12 +36,6 @@ RUN_ID = uuid.uuid4().hex[:8]
 BUCKET_NAME = f"s3-compat-test-{RUN_ID}"
 RESULTS_FILE = "s3_compat_results.json"
 
-# ---------------------------------------------------------------------------
-# Test registry -- add/remove operations here as needed
-# ---------------------------------------------------------------------------
-# Each test function receives (s3_client, bucket_name) and either returns
-# a short success detail string, raises an exception (-> FAIL), or returns
-# the sentinel "SKIP:<reason>" if the test genuinely cannot run generically.
 
 def test_create_bucket(s3, bucket):
     s3.create_bucket(Bucket=bucket, ObjectLockEnabledForBucket=True)
@@ -115,7 +64,7 @@ def test_list_objects(s3, bucket):
 
 def test_multipart_upload(s3, bucket):
     key = "multipart/big.bin"
-    part_size = 5 * 1024 * 1024  # 5 MiB minimum part size for most S3 impls
+    part_size = 5 * 1024 * 1024
     num_parts = 2
     mpu = s3.create_multipart_upload(Bucket=bucket, Key=key)
     upload_id = mpu["UploadId"]
@@ -167,7 +116,6 @@ def test_bucket_versioning(s3, bucket):
     )
     resp = s3.get_bucket_versioning(Bucket=bucket)
     assert resp.get("Status") == "Enabled", "versioning did not report Enabled after being set"
-    # write two versions of the same key and confirm both are listed
     key = "versioned/file.txt"
     s3.put_object(Bucket=bucket, Key=key, Body=b"v1")
     s3.put_object(Bucket=bucket, Key=key, Body=b"v2")
@@ -212,10 +160,6 @@ def test_bucket_lifecycle(s3, bucket):
 
 
 def test_object_lock(s3, bucket):
-    # Object lock generally must be enabled AT bucket creation time, which
-    # this generic script does not do (bucket is created without it above).
-    # We attempt to read lock config; if unsupported or not enabled, mark SKIP
-    # rather than FAIL, since this needs a dedicated bucket to test properly.
     try:
         s3.put_object_lock_configuration(Bucket=bucket, ObjectLockConfiguration={
             'ObjectLockEnabled': 'Enabled'
@@ -248,9 +192,7 @@ def test_bucket_policy(s3, bucket):
     return "bucket policy set and verified"
 
 
-
 def test_delete_objects_and_bucket(s3, bucket):
-    # cleanup -- also doubles as a test of batch delete
     to_delete = []
     used_version_api = False
     try:
@@ -262,8 +204,6 @@ def test_delete_objects_and_bucket(s3, bucket):
                 to_delete.append({"Key": m["Key"], "VersionId": m["VersionId"]})
         used_version_api = True
     except ClientError:
-        # Some S3-compatible stores (e.g. Garage) may not fully support
-        # list_object_versions -- fall back to a plain listing.
         pass
 
     if not used_version_api:
@@ -274,7 +214,6 @@ def test_delete_objects_and_bucket(s3, bucket):
 
     errors = []
     if to_delete:
-        # batch delete in chunks of 1000 (S3 API limit)
         for i in range(0, len(to_delete), 1000):
             chunk = to_delete[i : i + 1000]
             resp = s3.delete_objects(Bucket=bucket, Delete={"Objects": chunk})
@@ -288,9 +227,6 @@ def test_delete_objects_and_bucket(s3, bucket):
     return f"cleaned up {len(to_delete)} object-version(s) and deleted bucket"
 
 
-
-# Order matters: bucket must exist before objects can be created, and
-# cleanup must run last.
 TEST_SEQUENCE = [
     ("create_bucket", test_create_bucket),
     ("put_get_object", test_put_get_object),
@@ -343,7 +279,6 @@ def run_for_endpoint(cfg):
         except EndpointConnectionError as e:
             print(f"  [ERROR] {test_name}: could not connect -- {e}")
             results[test_name] = {"status": "ERROR", "detail": f"connection error: {e}"}
-            # if we can't connect at all, no point trying further tests
             remaining = [t for t, _ in TEST_SEQUENCE if t not in results]
             for r in remaining:
                 results[r] = {"status": "ERROR", "detail": "skipped: prior connection error"}
