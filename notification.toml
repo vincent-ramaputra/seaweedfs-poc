@@ -1,0 +1,3 @@
+[notification.webhook]
+enabled = true
+endpoint = "https://webhook.site/dad1ea36-3edd-4e6a-9dd4-d5d222e64869"

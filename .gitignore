@@ -1,0 +1,13 @@
+# secrets
+.env
+
+# volume mounts / runtime data
+seaweedfs/
+data/
+
+# python
+__pycache__/
+*.pyc
+
+# generated output
+s3_compat_results.json
