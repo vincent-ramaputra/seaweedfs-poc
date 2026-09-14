@@ -1,0 +1,65 @@
+# Single-node SeaweedFS on the same drives as bench/minio-compose.yml:
+# one volume server per drive, master + filer metadata on drive 1 (MinIO also
+# keeps its metadata on the data drives), S3 embedded in the filer.
+# Ports differ from the POC compose and the default SeaweedFS ports, which the
+# local kind cluster already holds.
+name: bench-seaweedfs
+
+x-sw: &sw
+  image: ${SW_IMAGE:-chrislusf/seaweedfs:4.40}
+  network_mode: host
+  cpuset: ${BENCH_CPUSET:-0-11}
+
+services:
+  master:
+    <<: *sw
+    command: >-
+      master -ip=127.0.0.1 -ip.bind=0.0.0.0 -port=9433 -metricsPort=9434
+      -mdir=/data/sw-master
+      -defaultReplication=${SW_REPLICATION:-001}
+      -volumeSizeLimitMB=${SW_VOLUME_SIZE_MB:-30000}
+    volumes:
+      - ${DRIVE1:-./drives/d1}:/data
+
+  volume1:
+    <<: *sw
+    command: volume -ip=127.0.0.1 -ip.bind=0.0.0.0 -port=8481 -metricsPort=9481 -master=127.0.0.1:9433 -dir=/data/sw-volume -max=0
+    volumes:
+      - ${DRIVE1:-./drives/d1}:/data
+    depends_on: [master]
+
+  volume2:
+    <<: *sw
+    command: volume -ip=127.0.0.1 -ip.bind=0.0.0.0 -port=8482 -metricsPort=9482 -master=127.0.0.1:9433 -dir=/data/sw-volume -max=0
+    volumes:
+      - ${DRIVE2:-./drives/d2}:/data
+    depends_on: [master]
+
+  volume3:
+    <<: *sw
+    command: volume -ip=127.0.0.1 -ip.bind=0.0.0.0 -port=8483 -metricsPort=9483 -master=127.0.0.1:9433 -dir=/data/sw-volume -max=0
+    volumes:
+      - ${DRIVE3:-./drives/d3}:/data
+    depends_on: [master]
+
+  volume4:
+    <<: *sw
+    command: volume -ip=127.0.0.1 -ip.bind=0.0.0.0 -port=8484 -metricsPort=9484 -master=127.0.0.1:9433 -dir=/data/sw-volume -max=0
+    volumes:
+      - ${DRIVE4:-./drives/d4}:/data
+    depends_on: [master]
+
+  filer:
+    <<: *sw
+    command: >-
+      filer -ip=127.0.0.1 -ip.bind=0.0.0.0 -port=8988 -metricsPort=9489
+      -master=127.0.0.1:9433
+      -defaultStoreDir=/data/sw-filer
+      -s3 -s3.port=${SW_S3_PORT:-8433} -s3.metricsPort=9490
+      -s3.config=/etc/seaweedfs/s3.json
+    volumes:
+      - ${DRIVE1:-./drives/d1}:/data
+      # Generated from BENCH_ACCESS_KEY/BENCH_SECRET_KEY by lib.sh so SeaweedFS
+      # verifies SigV4 like MinIO does.
+      - ./s3.generated.json:/etc/seaweedfs/s3.json:ro
+    depends_on: [volume1, volume2, volume3, volume4]

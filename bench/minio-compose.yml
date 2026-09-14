@@ -1,0 +1,23 @@
+# Single-node multi-drive MinIO, matching the production topology.
+# All settings come from bench/.env (see .env.example).
+name: bench-minio
+
+services:
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1}
+    network_mode: host
+    cpuset: ${BENCH_CPUSET:-0-11}
+    environment:
+      MINIO_ROOT_USER: ${BENCH_ACCESS_KEY:-benchadmin}
+      MINIO_ROOT_PASSWORD: ${BENCH_SECRET_KEY:-benchadmin-secret}
+      MINIO_STORAGE_CLASS_STANDARD: EC:${MINIO_PARITY:-2}
+    command: >-
+      server
+      --address :${MINIO_PORT:-9100}
+      --console-address :${MINIO_CONSOLE_PORT:-9101}
+      /drive1 /drive2 /drive3 /drive4
+    volumes:
+      - ${DRIVE1:-./drives/d1}:/drive1
+      - ${DRIVE2:-./drives/d2}:/drive2
+      - ${DRIVE3:-./drives/d3}:/drive3
+      - ${DRIVE4:-./drives/d4}:/drive4

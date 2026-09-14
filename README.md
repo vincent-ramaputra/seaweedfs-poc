@@ -53,3 +53,13 @@ acceptance test.
   on since most self-hosted S3-compatible stores expect it
   (virtual-hosted style requires DNS wildcard setup that most
   local/self-hosted setups don't have).
+
+## Benchmarking SeaweedFS against MinIO
+
+`bench/` compares the performance of SeaweedFS against a single-node,
+multi-drive MinIO (the production topology) using
+[warp](https://github.com/minio/warp): PUT, GET and mixed workloads across
+object sizes and concurrency levels.
+
+See [bench/README.md](bench/README.md) for what is measured, how the
+comparison is kept fair, and how to run it.

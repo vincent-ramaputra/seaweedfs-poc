@@ -11,3 +11,8 @@ __pycache__/
 
 # generated output
 s3_compat_results.json
+
+# benchmark data and output
+bench/drives/
+bench/results/
+bench/s3.generated.json
