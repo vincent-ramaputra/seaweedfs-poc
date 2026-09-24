@@ -1,0 +1,1 @@
+docker run --rm --network host --name bench-warp --cpuset-cpus 1\,3 -v /home/ubuntu/benchmark/results/20260924/minio:/out minio/warp:v1.3.1 put --host 127.0.0.1:9100 --access-key benchadmin --secret-key *** --bucket warp-benchmark-bucket --benchdata /out/put-4KiB-c16-r1 --full --analyze.skip 3s --obj.size 4KiB --concurrent 16 --duration 15s --disable-multipart 

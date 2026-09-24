@@ -1,0 +1,5 @@
+1790213424 {"BlockIO":"55.2MB / 249kB","CPUPerc":"0.77%","Container":"4d0f3746e739","ID":"4d0f3746e739","MemPerc":"0.46%","MemUsage":"72.96MiB / 15.41GiB","Name":"bench-minio-minio-1","NetIO":"0B / 0B","PIDs":"10"}
+1790213431 {"BlockIO":"18.7MB / 0B","CPUPerc":"59.51%","Container":"1f9c810042dc","ID":"1f9c810042dc","MemPerc":"0.47%","MemUsage":"74.12MiB / 15.41GiB","Name":"bench-warp","NetIO":"0B / 0B","PIDs":"5"}
+1790213431 {"BlockIO":"55.8MB / 760MB","CPUPerc":"50.07%","Container":"4d0f3746e739","ID":"4d0f3746e739","MemPerc":"2.03%","MemUsage":"321.1MiB / 15.41GiB","Name":"bench-minio-minio-1","NetIO":"0B / 0B","PIDs":"72"}
+1790213439 {"BlockIO":"18.7MB / 0B","CPUPerc":"33.07%","Container":"1f9c810042dc","ID":"1f9c810042dc","MemPerc":"0.38%","MemUsage":"60.06MiB / 15.41GiB","Name":"bench-warp","NetIO":"0B / 0B","PIDs":"5"}
+1790213439 {"BlockIO":"55.9MB / 1.78GB","CPUPerc":"53.02%","Container":"4d0f3746e739","ID":"4d0f3746e739","MemPerc":"2.16%","MemUsage":"340.9MiB / 15.41GiB","Name":"bench-minio-minio-1","NetIO":"0B / 0B","PIDs":"72"}
