@@ -27,7 +27,7 @@ from pathlib import Path
 
 BENCH_DIR = Path(__file__).resolve().parent
 NAME_RE = re.compile(r"^(?P<bench>[a-z]+)-(?P<param>.+)-c(?P<conc>\d+)-r(?P<rep>\d+)$")
-VARIANT_ORDER = ["minio", "sw-r001", "sw-r001-fsync"]
+VARIANT_ORDER = ["minio", "sw-minio-like", "sw-tuned"]
 BASELINE = "minio"
 CSV_FIELDS = [
     "bench", "param", "conc", "op", "variant", "rep", "requests", "errors",

@@ -39,8 +39,20 @@ commands.
 | Variant | Setup | Question it answers |
 |---|---|---|
 | `minio` | MinIO, 4 drives, erasure coding `EC:2` | Baseline: production today |
-| `sw-r001` | SeaweedFS, one volume server per drive, every object stored twice (replication `001`) | How fast is SeaweedFS at the same 2x storage overhead? |
-| `sw-r001-fsync` | Same, but every write is synced to disk before replying | How much of the difference is only disk syncing? |
+| `sw-minio-like` | SeaweedFS configured to match MinIO: one volume server per drive, every object stored twice (replication `001`, same 2x overhead), every write synced to disk (`fsync`), otherwise SeaweedFS defaults | Is SeaweedFS faster when it gives the same guarantees as MinIO? |
+| `sw-tuned` | SeaweedFS configured for speed, including options MinIO has no equivalent for (see below). Same 2x overhead. | How fast can SeaweedFS get? |
+
+`sw-tuned` differs from `sw-minio-like` in:
+
+| Setting | `sw-minio-like` | `sw-tuned` | Why |
+|---|---|---|---|
+| Disk syncing (`fs.configure -fsync`) | on | off (SeaweedFS default) | Replies before the OS flushes the write to disk. A crash or power loss can lose recently acknowledged writes. |
+| Volumes grown at once (`fs.configure -volumeGrowthCount`) | default | `SW_TUNED_GROWTH_COUNT` (8 physical = 4 replicated pairs) | Creates more writable volumes up front instead of stalling writes while growing a few at a time. |
+| S3 GET cache (`-s3.cacheCapacityMB`) | off | `SW_TUNED_CACHE_MB` (1024) | The S3 gateway serves repeated GETs of small objects from memory, skipping the volume server. Large (8 MiB) chunks are not cached. |
+
+Tried and left out: `-saveToFilerLimit` (store small objects in the filer
+store) and `-maxMB` (chunk size) have no effect on S3 uploads in SeaweedFS
+4.40. The S3 gateway always writes to volume servers in 8 MiB chunks.
 
 ## How the comparison is kept fair
 
@@ -53,11 +65,15 @@ commands.
   full, idle volumes later in the background. So SeaweedFS uses replication
   `001` (2 copies, also 2x). Note the difference in fault tolerance: `EC:2`
   survives losing 2 drives, replication `001` survives losing 1.
-- **Disk syncing measured both ways.** MinIO syncs each write to disk.
-  SeaweedFS doesn't unless `fs.configure -fsync` is set, which makes its writes
-  look faster than a like-for-like comparison would. `sw-r001-fsync` shows the
-  like-for-like number.
-- **Same CPUs.** Every container is pinned to `BENCH_CPUSET`.
+- **Same durability for the like-for-like variant.** MinIO syncs each write
+  to disk. SeaweedFS doesn't unless `fs.configure -fsync` is set, which makes
+  its writes look faster than a like-for-like comparison would.
+  `sw-minio-like` enables it; `sw-tuned` doesn't. The filer's metadata store
+  (LevelDB) is not synced in either variant, while MinIO syncs its metadata
+  (`xl.meta`) too.
+- **Same CPUs.** Every engine container is pinned to `BENCH_CPUSET`, and warp
+  to `WARP_CPUSET`. The two must not overlap: an unpinned load generator lands
+  on the engine's cores and makes both engines look equally slow.
 - **Same network path.** All containers use host networking, and SeaweedFS
   runs its S3 API inside the filer process, removing a network hop.
 - **Same authentication cost.** SeaweedFS is given an S3 user, so it
@@ -77,7 +93,7 @@ Each **test cell** is one warp run against a freshly started engine.
 | **PUT** | Uploads new objects, each with a new name, as fast as possible (single-part) | Write speed | object size × concurrency |
 | **GET** | Uploads a set of objects, then downloads them repeatedly | Read speed and time to first byte | object size × concurrency |
 | **Mixed** | GET, HEAD, PUT and DELETE at the same time, in a set ratio | Behavior under realistic traffic | concurrency |
-| **Long mixed** | Mixed workload for a long period (full matrix only) | Latency drift and background work (SeaweedFS vacuum, MinIO scanner) | once |
+| **Long mixed** | Mixed workload for a long period (full matrix only) | Latency drift and background work (SeaweedFS vacuum, MinIO scanner) | once, only if `LONG_MIXED_DURATION` is set |
 
 **Concurrency** is the number of requests in flight at once. Increasing it
 shows where each engine stops getting faster and latency starts climbing.
@@ -103,8 +119,9 @@ Per test cell and per operation:
 Percentiles are computed exactly from every recorded request (warp `--full`),
 not approximated from warp's per-segment summaries.
 
-Each cell also records container CPU/memory (`docker stats`) and disk load
-(`iostat`), to tell whether the engine or the disk was the bottleneck.
+Each cell also records container CPU/memory (`docker stats`, including warp
+itself as `bench-warp`) and disk load (`iostat`), to tell whether the engine,
+the disk or the load generator was the bottleneck.
 
 ## Requirements
 
@@ -119,7 +136,8 @@ Each cell also records container CPU/memory (`docker stats`) and disk load
 
 - Optional: passwordless `sudo`, to drop the page cache between tests
 
-Images used: `minio/minio`, `chrislusf/seaweedfs`, `minio/warp`, set in `.env`.
+Images used: `quay.io/minio/minio`, `chrislusf/seaweedfs`, `minio/warp`, set in
+`.env`. (MinIO's images moved off Docker Hub in 2025.)
 
 ## Quick run
 
@@ -130,13 +148,24 @@ level (16), 15 seconds per test, once. It also checks that the harness works.
 
 It is too short and too narrow to base a decision on: there is no
 concurrency curve, no repetitions to show variance, and each test measures
-only ~12 seconds. Use the [full benchmark](#full-benchmark) for decisions.
+only ~12 seconds.
+
+On a laptop, `matrix.small.env` is the smallest run worth quoting. It drops the
+concurrency curve but keeps `REPS=3`, so every difference arrives with a stdev
+next to it:
+
+```bash
+bench/sweep.sh <variant> bench/matrix.small.env
+```
+
+Use the [full benchmark](#full-benchmark) on a production-shaped machine for
+decisions.
 
 ```bash
 cp bench/.env.example bench/.env        # defaults work on a dev machine
 
 export BENCH_RUN=quick-$(date +%Y%m%d-%H%M)
-for v in minio sw-r001 sw-r001-fsync; do
+for v in minio sw-minio-like sw-tuned; do
   bench/sweep.sh "$v"
 done
 
@@ -157,6 +186,11 @@ Run this on a machine shaped like production, not a laptop.
    `MINIO_PARITY` to its parity. Point `DRIVE1`–`DRIVE4` at four separate
    physical drives. The compose files are written for 4 drives; see
    [Caveats](#caveats) for other counts.
+
+   On an EC2 `m5d.xlarge` (4 vCPUs, 16 GiB RAM, one 150 GB NVMe instance
+   store — no 4-drive layout available), copy `bench/.env.m5d-xlarge`
+   instead of `.env.example`; it has this single-disk caveat and the CPU
+   split for that instance's 2 physical cores already worked out.
 2. **Isolate the load generator.** Set `BENCH_CPUSET` to cores used by the
    engines only, and keep warp and other workloads off them. Ideally run warp
    from a separate machine.
@@ -164,11 +198,11 @@ Run this on a machine shaped like production, not a laptop.
    `MIXED_GET`, `MIXED_STAT`, `MIXED_PUT`, `MIXED_DELETE` to production's
    request ratio, and adjust `SIZES` to production's object sizes.
 4. **Run every variant** under the same run name, inside `tmux` or `screen`.
-   See [Duration and disk space](#duration-and-disk-space) first: this takes
-   days.
+   It takes ~1½ hours for all three (see
+   [Duration and disk space](#duration-and-disk-space)).
    ```bash
    export BENCH_RUN=$(date +%Y%m%d)
-   for v in minio sw-r001 sw-r001-fsync; do
+   for v in minio sw-minio-like sw-tuned; do
      bench/sweep.sh "$v" bench/matrix.full.env
    done
    ```
@@ -185,15 +219,18 @@ production-like server.
 | Matrix | Cells per variant | Per variant | All three |
 |---|---|---|---|
 | `matrix.env` (default) | 5 × 15 s | ~4 min | **~12 min** |
-| `matrix.full.env` | ~186 × 5 min (62 per rep × 3 reps), plus a 90 min long mixed run | ~1 day | **~3 days** |
+| `matrix.small.env` (laptop) | 21 × 20 s | ~18 min | **~55 min** |
+| `matrix.full.env` | 25 × 1 min | ~45 min | **~2¼ h** |
 
 Besides the measured time, each cell spends time restarting the engine
 (~10 s), uploading setup data and cleaning up; that overhead is included
 above.
 
 Time scales with the number of cells: each size, concurrency level or rep
-you add multiplies it. A middle ground, such as the default sizes with
-`CONCURRENCY="8 32 128"`, `DURATION=1m` and `REPS=2`, takes a few hours.
+you add multiplies it. For example, `REPS=2` doubles the full matrix, and
+`LONG_MIXED_DURATION=10m` adds ~35 minutes for all three variants. Large
+objects are also slow to set up: each GET cell first uploads
+`GET_MAX_BYTES` of data, which takes ~45 minutes for 200 GiB at 75 MiB/s.
 
 **Disk space.** The drives need room for `GET_MAX_BYTES` × the storage
 overhead (2x for both `EC:2` and replication `001`) plus headroom:
@@ -201,10 +238,12 @@ overhead (2x for both `EC:2` and replication `001`) plus headroom:
 | Matrix | `GET_MAX_BYTES` | Free space needed across the drives |
 |---|---|---|
 | `matrix.env` | 512 MiB | ~2 GB |
-| `matrix.full.env` | 200 GiB | ~500 GB |
+| `matrix.small.env` | 256 MiB | ~1 GB, plus up to ~10 GB for a 20-second PUT of 8 MiB objects |
+| `matrix.full.env` | 1 GiB | ~3 GB, plus up to ~30 GB for a 1-minute PUT of 12 MiB objects on fast drives |
 
 The drives default to directories under `bench/`, so on a dev machine this
-space comes out of that filesystem. Don't run `matrix.full.env` on a laptop.
+space comes out of that filesystem. Run `matrix.full.env` on the benchmark
+server, not a laptop.
 
 **Resuming.** A sweep skips cells that already have results, so after an
 interruption, rerun the same command with the same `BENCH_RUN`. To redo a
@@ -227,44 +266,53 @@ Copy from `.env.example`. Read by both compose files and the scripts.
 | Variable | Default | Purpose |
 |---|---|---|
 | `DRIVE1`–`DRIVE4` | `./drives/d1`–`d4` | Data drives (relative paths are relative to `bench/`). **Wiped before every test.** |
-| `MINIO_IMAGE` | `minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1` | Set to the production release |
+| `MINIO_IMAGE` | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z-cpuv1` | Set to the production release |
 | `MINIO_PARITY` | `2` | Erasure-coding parity (`EC:N`) |
 | `MINIO_PORT`, `MINIO_CONSOLE_PORT` | `9100`, `9101` | MinIO ports |
 | `SW_IMAGE` | `chrislusf/seaweedfs:4.40` | SeaweedFS release |
 | `SW_REPLICATION` | `001` | SeaweedFS replication for writes |
-| `SW_VOLUME_SIZE_MB` | `30000` | SeaweedFS volume size limit |
+| `SW_VOLUME_SIZE_MB` | `1024` | SeaweedFS volume size limit, both SeaweedFS variants (see [Caveats](#caveats)) |
 | `SW_S3_PORT` | `8433` | SeaweedFS S3 port |
+| `SW_TUNED_GROWTH_COUNT` | `8` | Physical volumes `sw-tuned` grows at once |
+| `SW_TUNED_CACHE_MB` | `1024` | S3 GET chunk cache for `sw-tuned` (counts toward server memory) |
 | `WARP_IMAGE` | `minio/warp:v1.3.1` | warp release |
 | `BENCH_CPUSET` | `0-11` | CPUs every engine container is pinned to |
+| `WARP_CPUSET` | (empty = unpinned) | CPUs warp is pinned to. Must not overlap `BENCH_CPUSET`. Split by physical core, not vCPU number — check `lscpu -p=CPU,CORE,SOCKET`, since hyperthread siblings share execution units. |
 | `BENCH_ACCESS_KEY`, `BENCH_SECRET_KEY` | `benchadmin`, `benchadmin-secret` | S3 credentials for both engines |
 | `BENCH_DROP_CACHES` | `1` | Drop the page cache between tests (needs passwordless `sudo`) |
 
 ### Matrix files
 
-`matrix.env` (default, ~12 minutes) and `matrix.full.env` (exhaustive, days)
-define what runs. Pass a matrix file as the second argument to `sweep.sh`;
+`matrix.env` (default, ~12 minutes), `matrix.small.env` (laptop, ~55 minutes)
+and `matrix.full.env` (the real benchmark, ~2¼ hours) define what runs, for all
+three variants. Pass a matrix file as the second argument to `sweep.sh`;
 without one, `matrix.env` is used.
 
-| Setting | Default | Full | Meaning |
-|---|---|---|---|
-| `SIZES` | 4KiB 16MiB | 1KiB … 1GiB | Object sizes for PUT and GET |
-| `CONCURRENCY` | 16 | 1 8 32 128 512 | Concurrency levels for PUT and GET |
-| `DURATION` | 15s | 5m | Length of each test |
-| `SKIP` | 3s | 30s | Warm-up excluded from results |
-| `REPS` | 1 | 3 | Repetitions of the whole matrix |
-| `GET_OBJECTS` | 200 | 10000 | Objects uploaded before GET and mixed |
-| `GET_MAX_BYTES` | 512 MiB | 200 GiB | Caps `GET_OBJECTS × size` so large sizes fit on the drives |
-| `MIXED_SIZE` | 1MiB | 1MiB | Object size in the mixed test |
-| `MIXED_CONCURRENCY` | 16 | 32 128 | Concurrency for mixed |
-| `MIXED_GET/STAT/PUT/DELETE` | 45/30/15/10 | 45/30/15/10 | Mixed request ratio. `DELETE` must be ≤ `PUT`. |
-| `LONG_MIXED_DURATION` | (empty = skip) | 90m | Long mixed run |
+`matrix.small.env` spends its budget on repetitions rather than breadth: one
+concurrency level, modest object sizes, but `REPS=3`. On a machine where the
+absolute numbers are not trustworthy anyway, a ratio with a stdev beside it is
+the only output worth keeping.
+
+| Setting | Default | Small | Full | Meaning |
+|---|---|---|---|---|
+| `SIZES` | 4KiB 6MiB 16MiB | 4KiB 1MiB 8MiB | 1KiB 128KiB 1MiB 12MiB | Object sizes for PUT and GET |
+| `CONCURRENCY` | 16 | 8 | 1 8 16 | Concurrency levels for PUT and GET |
+| `DURATION` | 15s | 20s | 1m | Length of each test |
+| `SKIP` | 3s | 5s | 10s | Warm-up excluded from results |
+| `REPS` | 1 | 3 | 1 | Repetitions of the whole matrix |
+| `GET_OBJECTS` | 200 | 200 | 2000 | Objects uploaded before GET and mixed |
+| `GET_MAX_BYTES` | 512 MiB | 256 MiB | 1 GiB | Caps `GET_OBJECTS × size` so large sizes fit on the drives and upload quickly |
+| `MIXED_SIZE` | 1MiB | 1MiB | 1MiB | Object size in the mixed test |
+| `MIXED_CONCURRENCY` | 16 | 8 | 32 | Concurrency for mixed |
+| `MIXED_GET/STAT/PUT/DELETE` | 45/30/15/10 | 45/30/15/10 | 45/30/15/10 | Mixed request ratio. `DELETE` must be ≤ `PUT`. |
+| `LONG_MIXED_DURATION` | (empty = skip) | (empty = skip) | (empty = skip) | Long mixed run |
 
 Environment overrides for `sweep.sh`:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `BENCH_RUN` | today's date | Results directory name |
-| `WARP_MAX_INFLIGHT_BYTES` | 16 GiB | Skip cells where `size × concurrency` would exceed warp's memory budget |
+| `WARP_MAX_INFLIGHT_BYTES` | 16 GiB | Skip cells where `size × concurrency` would exceed warp's memory budget. `matrix.small.env` (1 GiB) and `matrix.full.env` (2 GiB) lower it; the default is too high for a laptop. |
 
 ## Output
 
@@ -279,7 +327,7 @@ bench/results/<BENCH_RUN>/
     ├── <cell>.csv.zst              # warp raw data: one row per request
     ├── <cell>.log                  # warp's console report
     ├── <cell>.cmd                  # exact warp command
-    ├── <cell>.docker-stats.jsonl   # container CPU/memory, every 5s
+    ├── <cell>.docker-stats.jsonl   # engine + warp CPU/memory, every 5s
     └── <cell>.iostat.txt           # drive I/O stats, every 5s
 ```
 
@@ -298,7 +346,7 @@ concurrency there is a row per variant:
 ```
 | param | conc | variant       | ops/s  | MiB/s | p50  | p99  | p99.9 | TTFB p99 | errors | ops/s vs minio | p99 vs minio |
 | 1MiB  | 32   | minio         | 2,374  | 2,374 | 12.1 | 30.2 | 55.0  | 29.8     | 0      |                |              |
-| 1MiB  | 32   | sw-r001       | 3,100  | 3,100 | 9.0  | 25.1 | 80.3  | 24.0     | 0      | 1.31×          | 0.83×        |
+| 1MiB  | 32   | sw-minio-like | 3,100  | 3,100 | 9.0  | 25.1 | 80.3  | 24.0     | 0      | 1.31×          | 0.83×        |
 ```
 
 (Illustrative numbers.)
@@ -311,8 +359,9 @@ concurrency there is a row per variant:
 
 What to look at:
 
-1. **Compare `sw-r001-fsync` against `minio` for writes.** It's the
-   like-for-like number. `sw-r001` shows the best case without syncing.
+1. **Compare `sw-minio-like` against `minio`.** It's the like-for-like
+   number. `sw-tuned` shows the best case, at weaker crash durability (no
+   fsync). The gap between the two SeaweedFS variants is what tuning buys.
 2. **Follow each engine across concurrency levels** (full matrix). The point
    where ops/s stops rising and p99 jumps is its practical limit.
 3. **Look at small objects and large objects separately.** SeaweedFS is built
@@ -337,15 +386,23 @@ What to look at:
 - **Laptop results aren't real results.** On a single-disk machine the four
   "drives" are directories on one device, so neither engine gets real
   multi-drive I/O, and other workloads on the machine add noise.
-- **The load generator shares the host by default.** On the real benchmark,
-  run warp from another machine, or at least on cores outside `BENCH_CPUSET`.
+- **The load generator shares the host.** Set `WARP_CPUSET` to cores outside
+  `BENCH_CPUSET` so warp cannot take the engine's. Pinning removes CPU
+  contention but not shared L3 cache and memory bandwidth; both engines take
+  that hit equally, so a ratio survives it while absolute numbers do not.
+  Running warp from another machine removes it entirely, but then the network
+  is inside the measurement.
 - **4 drives are hard-coded** in both compose files. For another drive count,
   add or remove drive mounts in `minio-compose.yml`, volume services in
   `seaweedfs-compose.yml`, and the loops in `lib.sh` (`drive_paths`,
   `wipe_drives`, the volume-server count in `wait_ready`).
 - **SeaweedFS volume slots.** `-max=0` sizes each volume server's volume count
-  from free disk space divided by `SW_VOLUME_SIZE_MB`. Small drives get very
-  few writable volumes, which can limit write concurrency.
+  from free disk space divided by `SW_VOLUME_SIZE_MB`. Writes to one volume
+  are serialized, so fewer volumes means less write concurrency. SeaweedFS's
+  default of 30 GB leaves small drives with only 1–2 volumes each, a limit
+  MinIO doesn't have, so both SeaweedFS variants use 1 GB. Volume size doesn't
+  affect durability. On multi-TB drives, 1 GB means thousands of volumes per
+  server, each with its own in-memory index; raise it there.
 - **Fault tolerance differs.** Replication `001` survives 1 drive failure,
   `EC:2` survives 2. `SW_REPLICATION=002` matches that tolerance at 3x storage.
 - **Not covered:** SeaweedFS erasure coding (it targets warm storage and
@@ -364,6 +421,8 @@ What to look at:
 | `minio-compose.yml` | Single-node, 4-drive MinIO |
 | `seaweedfs-compose.yml` | SeaweedFS: master, 4 volume servers, filer with S3 |
 | `matrix.env` | Default matrix: first impression in ~12 minutes |
-| `matrix.full.env` | Exhaustive matrix for a production-like server (days) |
+| `matrix.small.env` | Laptop matrix: fewer cells, 3 reps, ~55 minutes for all three variants |
+| `matrix.full.env` | The real benchmark on the AWS server (~2¼ hours for all three variants) |
 | `.env.example` | Settings template |
+| `.env.m5d-xlarge` | Settings template for an EC2 `m5d.xlarge` benchmark server |
 | `s3.generated.json` | SeaweedFS S3 credentials, generated from `.env` (gitignored) |

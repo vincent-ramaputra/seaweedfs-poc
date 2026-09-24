@@ -17,7 +17,7 @@ services:
       master -ip=127.0.0.1 -ip.bind=0.0.0.0 -port=9433 -metricsPort=9434
       -mdir=/data/sw-master
       -defaultReplication=${SW_REPLICATION:-001}
-      -volumeSizeLimitMB=${SW_VOLUME_SIZE_MB:-30000}
+      -volumeSizeLimitMB=${SW_VOLUME_SIZE_MB:-1024}
     volumes:
       - ${DRIVE1:-./drives/d1}:/data
 
@@ -57,6 +57,7 @@ services:
       -defaultStoreDir=/data/sw-filer
       -s3 -s3.port=${SW_S3_PORT:-8433} -s3.metricsPort=9490
       -s3.config=/etc/seaweedfs/s3.json
+      ${SW_FILER_FLAGS:-}
     volumes:
       - ${DRIVE1:-./drives/d1}:/data
       # Generated from BENCH_ACCESS_KEY/BENCH_SECRET_KEY by lib.sh so SeaweedFS
