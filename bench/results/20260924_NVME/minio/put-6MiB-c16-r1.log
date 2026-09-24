@@ -1,0 +1,10 @@
+
+----------------------------------------
+Operation: PUT. Concurrency: 16
+* Average: 62.04 MiB/s, 10.34 obj/s
+
+Throughput, split into 7 x 1s:
+ * Fastest: 63.4MiB/s, 10.57 obj/s
+ * 50% Median: 63.1MiB/s, 10.52 obj/s
+ * Slowest: 57.8MiB/s, 9.63 obj/s
+

@@ -11,10 +11,14 @@ fi
 
 # Defaults must match the compose files.
 : "${DRIVE1:=./drives/d1}" "${DRIVE2:=./drives/d2}" "${DRIVE3:=./drives/d3}" "${DRIVE4:=./drives/d4}"
-: "${MINIO_PORT:=9100}" "${SW_S3_PORT:=8433}"
+: "${MINIO_PORT:=9100}" "${SW_S3_PORT:=8433}" "${SW_VOLUME_SIZE_MB:=1024}"
 : "${SW_IMAGE:=chrislusf/seaweedfs:4.40}" "${WARP_IMAGE:=minio/warp:v1.3.1}"
 : "${BENCH_ACCESS_KEY:=benchadmin}" "${BENCH_SECRET_KEY:=benchadmin-secret}"
 : "${BENCH_DROP_CACHES:=1}"
+# CPUs warp is pinned to. Empty leaves it unpinned, free to land on the same
+# cores as the engine it is measuring.
+: "${WARP_CPUSET:=}"
+: "${SW_TUNED_CACHE_MB:=1024}" "${SW_TUNED_GROWTH_COUNT:=8}"
 export DRIVE1 DRIVE2 DRIVE3 DRIVE4 MINIO_PORT SW_S3_PORT SW_IMAGE WARP_IMAGE BENCH_ACCESS_KEY BENCH_SECRET_KEY
 
 BENCH_BUCKET=warp-benchmark-bucket
@@ -24,13 +28,26 @@ SW_FILER=127.0.0.1:8988
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
+VARIANTS="minio sw-minio-like sw-tuned"
+
 # minio -> minio, sw-* -> seaweedfs
 engine_of() {
   case "$1" in
     minio) echo minio ;;
-    sw-r001 | sw-r001-fsync) echo seaweedfs ;;
-    *) die "unknown variant '$1' (expected minio, sw-r001, sw-r001-fsync)" ;;
+    sw-minio-like | sw-tuned) echo seaweedfs ;;
+    *) die "unknown variant '$1' (expected one of: $VARIANTS)" ;;
   esac
+}
+
+# Export the extra filer flags seaweedfs-compose.yml reads for a variant.
+# sw-minio-like keeps SeaweedFS defaults (fsync is enabled after startup).
+# sw-tuned adds -s3.cacheCapacityMB, an in-memory chunk cache shared by S3 GETs.
+sw_variant_env() {
+  SW_FILER_FLAGS=
+  if [[ $1 == sw-tuned ]]; then
+    SW_FILER_FLAGS="-s3.cacheCapacityMB=$SW_TUNED_CACHE_MB"
+  fi
+  export SW_FILER_FLAGS
 }
 
 compose() {
@@ -99,7 +116,10 @@ wait_ready() {
     sleep 1
   done
   if [[ $engine == seaweedfs ]]; then
-    tries=60
+    # 4 minutes: on a CPU-constrained BENCH_CPUSET (e.g. 2 vCPUs shared by
+    # master + 4 volumes + filer), registration is slow, and reset_engine
+    # pays this wait on every cell.
+    tries=240
     until [[ $(sw_volume_server_count) -ge 4 ]]; do
       ((tries--)) || die "seaweedfs: fewer than 4 volume servers registered"
       sleep 1
@@ -126,11 +146,15 @@ reset_engine() {
   compose seaweedfs down --remove-orphans >/dev/null 2>&1 || true
   wipe_drives "$engine"
   [[ $engine == seaweedfs ]] && write_s3_config
-  compose "$engine" --progress quiet up -d >/dev/null
+  (sw_variant_env "$variant" && compose "$engine" --progress quiet up -d >/dev/null)
   wait_ready "$engine"
-  if [[ $variant == sw-r001-fsync ]]; then
-    sw_shell "fs.configure -locationPrefix=/buckets/ -fsync=true -apply" >/dev/null
-  fi
+  case $variant in
+    # MinIO syncs every write to disk before replying. SeaweedFS 4.40 stores this
+    # setting but does not apply it to S3 PUTs (see README).
+    sw-minio-like) sw_shell "fs.configure -locationPrefix=/buckets/ -fsync=true -apply" >/dev/null ;;
+    # Grow several replicated volumes at once when a bucket runs out of writable ones.
+    sw-tuned) sw_shell "fs.configure -locationPrefix=/buckets/ -volumeGrowthCount=$SW_TUNED_GROWTH_COUNT -apply" >/dev/null ;;
+  esac
   drop_caches
 }
 
@@ -152,9 +176,14 @@ drop_caches() {
 run_warp() {
   local variant=$1 outdir=$2 name=$3 op=$4
   shift 4
-  local engine cmd
+  local engine cmd pin=()
   engine=$(engine_of "$variant")
-  cmd=(docker run --rm --network host -v "$outdir:/out" "$WARP_IMAGE" "$op"
+  [[ -n $WARP_CPUSET ]] && pin=(--cpuset-cpus "$WARP_CPUSET")
+  # Named so start_metrics' name=^bench- filter records warp's own CPU and
+  # memory; without it a client-side bottleneck is invisible in the results.
+  # An interrupted run can leave the name behind.
+  docker rm -f bench-warp >/dev/null 2>&1 || true
+  cmd=(docker run --rm --network host --name bench-warp "${pin[@]}" -v "$outdir:/out" "$WARP_IMAGE" "$op"
     --host "$(endpoint "$engine")"
     --access-key "$BENCH_ACCESS_KEY" --secret-key "$BENCH_SECRET_KEY"
     --bucket "$BENCH_BUCKET"
@@ -214,12 +243,18 @@ record_environment() {
       echo "engine: $(compose minio exec -T minio minio --version 2>/dev/null | head -1)"
     else
       echo "engine: $(compose seaweedfs exec -T master weed version 2>/dev/null | head -1)"
+      (
+        sw_variant_env "$variant"
+        echo "seaweedfs: volumeSizeLimitMB=$SW_VOLUME_SIZE_MB filer flags: $SW_FILER_FLAGS"
+      )
     fi
     echo "cpus: $(nproc)"
     free -h
     lsblk -d -o NAME,SIZE,ROTA,MODEL 2>/dev/null | grep -v '^loop'
     echo "--- drives"
-    drive_paths | while read -r d; do df -h "$d" | tail -1; done
+    # mkdir: this runs before the first reset_engine/wipe_drives, so a drive
+    # path used for the first time here would otherwise not exist yet.
+    drive_paths | while read -r d; do mkdir -p "$d"; df -h "$d" | tail -1; done
   } >"$outdir/environment.txt"
   cp "$matrix" "$outdir/matrix.env"
   [[ -f $BENCH_DIR/.env ]] && sed 's/^BENCH_SECRET_KEY=.*/BENCH_SECRET_KEY=***/' "$BENCH_DIR/.env" >"$outdir/bench.env"

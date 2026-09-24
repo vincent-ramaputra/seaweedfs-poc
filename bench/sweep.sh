@@ -3,7 +3,7 @@
 #
 #   bench/sweep.sh <variant> [matrix file]
 #
-# Variants: minio, sw-r001, sw-r001-fsync.
+# Variants: minio, sw-minio-like, sw-tuned (see README).
 # Results go to bench/results/$BENCH_RUN/<variant>/ (BENCH_RUN defaults to
 # today's date). Cells that already have results are skipped, so an
 # interrupted sweep can be resumed by rerunning the same command.
@@ -12,7 +12,7 @@ set -euo pipefail
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-variant=${1:?usage: sweep.sh <minio|sw-r001|sw-r001-fsync> [matrix file]}
+variant=${1:?usage: sweep.sh <minio|sw-minio-like|sw-tuned> [matrix file]}
 matrix=$(realpath "${2:-$BENCH_DIR/matrix.env}")
 engine_of "$variant" >/dev/null
 # shellcheck disable=SC1090
