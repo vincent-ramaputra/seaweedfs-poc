@@ -39,14 +39,14 @@ commands.
 | Variant | Setup | Question it answers |
 |---|---|---|
 | `minio` | MinIO, 4 drives, erasure coding `EC:2` | Baseline: production today |
-| `sw-minio-like` | SeaweedFS configured to match MinIO: one volume server per drive, every object stored twice (replication `001`, same 2x overhead), every write synced to disk (`fsync`), otherwise SeaweedFS defaults | Is SeaweedFS faster when it gives the same guarantees as MinIO? |
+| `sw-minio-like` | SeaweedFS configured to match MinIO: one volume server per drive, every object stored twice (replication `001`, same 2x overhead), `fs.configure -fsync` set, otherwise SeaweedFS defaults. **S3 writes are still not synced to disk** (see [below](#how-the-comparison-is-kept-fair)) | Is SeaweedFS faster with the same layout as MinIO? Like-for-like for reads only |
 | `sw-tuned` | SeaweedFS configured for speed, including options MinIO has no equivalent for (see below). Same 2x overhead. | How fast can SeaweedFS get? |
 
 `sw-tuned` differs from `sw-minio-like` in:
 
 | Setting | `sw-minio-like` | `sw-tuned` | Why |
 |---|---|---|---|
-| Disk syncing (`fs.configure -fsync`) | on | off (SeaweedFS default) | Replies before the OS flushes the write to disk. A crash or power loss can lose recently acknowledged writes. |
+| Disk syncing (`fs.configure -fsync`) | set | not set (SeaweedFS default) | Meant to make SeaweedFS sync each write before replying. In 4.40 it has no effect on S3 PUTs, so in practice both variants reply before the OS flushes the write to disk. |
 | Volumes grown at once (`fs.configure -volumeGrowthCount`) | default | `SW_TUNED_GROWTH_COUNT` (8 physical = 4 replicated pairs) | Creates more writable volumes up front instead of stalling writes while growing a few at a time. |
 | S3 GET cache (`-s3.cacheCapacityMB`) | off | `SW_TUNED_CACHE_MB` (1024) | The S3 gateway serves repeated GETs of small objects from memory, skipping the volume server. Large (8 MiB) chunks are not cached. |
 
@@ -65,12 +65,22 @@ store) and `-maxMB` (chunk size) have no effect on S3 uploads in SeaweedFS
   full, idle volumes later in the background. So SeaweedFS uses replication
   `001` (2 copies, also 2x). Note the difference in fault tolerance: `EC:2`
   survives losing 2 drives, replication `001` survives losing 1.
-- **Same durability for the like-for-like variant.** MinIO syncs each write
-  to disk. SeaweedFS doesn't unless `fs.configure -fsync` is set, which makes
-  its writes look faster than a like-for-like comparison would.
-  `sw-minio-like` enables it; `sw-tuned` doesn't. The filer's metadata store
-  (LevelDB) is not synced in either variant, while MinIO syncs its metadata
-  (`xl.meta`) too.
+- **Not the same write durability (known gap).** MinIO syncs each write,
+  including its metadata (`xl.meta`), to disk before replying. SeaweedFS 4.40
+  does not sync S3 PUTs in either variant: `sw-minio-like` sets
+  `fs.configure -locationPrefix=/buckets/ -fsync=true`, and `fs.configure`
+  shows it stored, but under a 4KiB PUT load a volume server made ~15,000
+  `pwrite64` calls and zero `fsync`/`fdatasync` in 10 s (strace, EC2
+  m5d.xlarge, 2026-09-24). The filer's metadata store (LevelDB) isn't synced
+  either. A power loss or host crash can lose recently acknowledged SeaweedFS
+  writes, and SeaweedFS PUT results are an upper bound, not a like-for-like
+  number. To check a new version or setting, trace a volume server during a
+  PUT run:
+
+  ```bash
+  PID=$(docker inspect -f '{{.State.Pid}}' bench-seaweedfs-volume1-1)
+  sudo timeout -s INT 10 strace -f -c -e trace=pwrite64,fsync,fdatasync -p "$PID"
+  ```
 - **Same CPUs.** Every engine container is pinned to `BENCH_CPUSET`, and warp
   to `WARP_CPUSET`. The two must not overlap: an unpinned load generator lands
   on the engine's cores and makes both engines look equally slow.
@@ -359,9 +369,13 @@ concurrency there is a row per variant:
 
 What to look at:
 
-1. **Compare `sw-minio-like` against `minio`.** It's the like-for-like
-   number. `sw-tuned` shows the best case, at weaker crash durability (no
-   fsync). The gap between the two SeaweedFS variants is what tuning buys.
+1. **Compare `sw-minio-like` against `minio`**, for reads. It's the
+   like-for-like number for GETs. For writes it isn't: neither SeaweedFS
+   variant syncs S3 PUTs to disk (see
+   [How the comparison is kept fair](#how-the-comparison-is-kept-fair)), so
+   treat SeaweedFS PUT and mixed-workload numbers as an upper bound.
+   `sw-tuned` shows the best case; the gap between the two SeaweedFS variants
+   is what the cache and volume growth buy.
 2. **Follow each engine across concurrency levels** (full matrix). The point
    where ops/s stops rising and p99 jumps is its practical limit.
 3. **Look at small objects and large objects separately.** SeaweedFS is built

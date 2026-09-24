@@ -149,7 +149,8 @@ reset_engine() {
   (sw_variant_env "$variant" && compose "$engine" --progress quiet up -d >/dev/null)
   wait_ready "$engine"
   case $variant in
-    # MinIO syncs every write to disk before replying.
+    # MinIO syncs every write to disk before replying. SeaweedFS 4.40 stores this
+    # setting but does not apply it to S3 PUTs (see README).
     sw-minio-like) sw_shell "fs.configure -locationPrefix=/buckets/ -fsync=true -apply" >/dev/null ;;
     # Grow several replicated volumes at once when a bucket runs out of writable ones.
     sw-tuned) sw_shell "fs.configure -locationPrefix=/buckets/ -volumeGrowthCount=$SW_TUNED_GROWTH_COUNT -apply" >/dev/null ;;
