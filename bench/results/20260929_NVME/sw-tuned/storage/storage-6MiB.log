@@ -1,0 +1,14 @@
+
+----------------------------------------
+Operation: PUT. Concurrency: 16
+* Average: 66.26 MiB/s, 11.04 obj/s
+
+Throughput, split into 11 x 1s:
+ * Fastest: 71.1MiB/s, 11.85 obj/s
+ * 50% Median: 67.0MiB/s, 11.16 obj/s
+ * Slowest: 62.4MiB/s, 10.40 obj/s
+
+----------------------------------------
+Operation: GET. Concurrency: 0
+Skipping GET too few samples. Longer benchmark run required for reliable results.
+

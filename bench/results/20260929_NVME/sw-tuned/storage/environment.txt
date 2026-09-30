@@ -1,0 +1,18 @@
+variant: sw-tuned
+date: 2026-09-29T16:00:18+00:00
+git: 
+warp image: minio/warp:v1.3.1
+engine: version 30GB 4.40 875cd1f67 linux amd64
+seaweedfs: volumeSizeLimitMB=1024 filer flags: -s3.cacheCapacityMB=1024
+cpus: 4
+               total        used        free      shared  buff/cache   available
+Mem:            15Gi       2.0Gi        10Gi       1.0Mi       2.6Gi        13Gi
+Swap:             0B          0B          0B
+NAME      SIZE ROTA MODEL
+nvme0n1    35G    0 Amazon Elastic Block Store
+nvme1n1 139.7G    0 Amazon EC2 NVMe Instance Storage
+--- drives
+/dev/nvme1n1    140G  3.9G  136G   3% /mnt/nvme1
+/dev/nvme1n1    140G  3.9G  136G   3% /mnt/nvme1
+/dev/nvme1n1    140G  3.9G  136G   3% /mnt/nvme1
+/dev/nvme1n1    140G  3.9G  136G   3% /mnt/nvme1

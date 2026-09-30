@@ -1,0 +1,18 @@
+variant: sw-minio-like
+date: 2026-09-29T17:04:56+00:00
+git: 
+warp image: minio/warp:v1.3.1
+engine: 
+seaweedfs: volumeSizeLimitMB=1024 filer flags: 
+cpus: 4
+               total        used        free      shared  buff/cache   available
+Mem:            15Gi       746Mi        13Gi       0.0Ki       1.0Gi        14Gi
+Swap:             0B          0B          0B
+NAME      SIZE ROTA MODEL
+nvme0n1    35G    0 Amazon Elastic Block Store
+nvme1n1 139.7G    0 Amazon EC2 NVMe Instance Storage
+--- drives
+/dev/root        34G  6.5G   28G  20% /
+/dev/root        34G  6.5G   28G  20% /
+/dev/root        34G  6.5G   28G  20% /
+/dev/root        34G  6.5G   28G  20% /

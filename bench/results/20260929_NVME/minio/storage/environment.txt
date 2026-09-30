@@ -1,0 +1,17 @@
+variant: minio
+date: 2026-09-29T15:53:38+00:00
+git: 
+warp image: minio/warp:v1.3.1
+engine: 
+cpus: 4
+               total        used        free      shared  buff/cache   available
+Mem:            15Gi       328Mi        14Gi       0.0Ki       800Mi        14Gi
+Swap:             0B          0B          0B
+NAME      SIZE ROTA MODEL
+nvme0n1    35G    0 Amazon Elastic Block Store
+nvme1n1 139.7G    0 Amazon EC2 NVMe Instance Storage
+--- drives
+/dev/nvme1n1    140G  1.1G  139G   1% /mnt/nvme1
+/dev/nvme1n1    140G  1.1G  139G   1% /mnt/nvme1
+/dev/nvme1n1    140G  1.1G  139G   1% /mnt/nvme1
+/dev/nvme1n1    140G  1.1G  139G   1% /mnt/nvme1

@@ -1,7 +1,0 @@
-1790213447 {"BlockIO":"56.5MB / 193MB","CPUPerc":"138.06%","Container":"d8759eb0fd2f","ID":"d8759eb0fd2f","MemPerc":"1.90%","MemUsage":"299.7MiB / 15.41GiB","Name":"bench-minio-minio-1","NetIO":"0B / 0B","PIDs":"10"}
-1790213454 {"BlockIO":"19MB / 0B","CPUPerc":"0.00%","Container":"d1f13391f785","ID":"d1f13391f785","MemPerc":"0.26%","MemUsage":"41.14MiB / 15.41GiB","Name":"bench-warp","NetIO":"0B / 0B","PIDs":"5"}
-1790213454 {"BlockIO":"56.6MB / 1.08GB","CPUPerc":"3.76%","Container":"d8759eb0fd2f","ID":"d8759eb0fd2f","MemPerc":"2.07%","MemUsage":"326.9MiB / 15.41GiB","Name":"bench-minio-minio-1","NetIO":"0B / 0B","PIDs":"71"}
-1790213462 {"BlockIO":"19MB / 0B","CPUPerc":"122.17%","Container":"d1f13391f785","ID":"d1f13391f785","MemPerc":"0.24%","MemUsage":"37.45MiB / 15.41GiB","Name":"bench-warp","NetIO":"0B / 0B","PIDs":"6"}
-1790213462 {"BlockIO":"594MB / 1.08GB","CPUPerc":"205.37%","Container":"d8759eb0fd2f","ID":"d8759eb0fd2f","MemPerc":"4.02%","MemUsage":"633.8MiB / 15.41GiB","Name":"bench-minio-minio-1","NetIO":"0B / 0B","PIDs":"71"}
-1790213469 {"BlockIO":"19MB / 0B","CPUPerc":"120.88%","Container":"d1f13391f785","ID":"d1f13391f785","MemPerc":"0.22%","MemUsage":"34.32MiB / 15.41GiB","Name":"bench-warp","NetIO":"0B / 0B","PIDs":"6"}
-1790213469 {"BlockIO":"594MB / 1.08GB","CPUPerc":"204.01%","Container":"d8759eb0fd2f","ID":"d8759eb0fd2f","MemPerc":"4.01%","MemUsage":"633.2MiB / 15.41GiB","Name":"bench-minio-minio-1","NetIO":"0B / 0B","PIDs":"71"}

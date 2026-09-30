@@ -65,13 +65,23 @@ cell() {
   stop_metrics
 }
 
+# Mixed cells run at a fixed total request rate when MIXED_RPS_LIMIT is set,
+# so they measure latency at a given load rather than maximum throughput. The
+# rate goes into the cell name to keep these apart from unlimited runs.
+mixed_rps_flags=()
+mixed_param=$MIXED_SIZE
+if [[ -n ${MIXED_RPS_LIMIT:-} ]]; then
+  mixed_rps_flags=(--rps-limit "$MIXED_RPS_LIMIT")
+  mixed_param="$MIXED_SIZE-rps$MIXED_RPS_LIMIT"
+fi
+
 # mixed_cell <name> <concurrency> <duration>
 mixed_cell() {
   cell "$1" mixed \
     --obj.size "$MIXED_SIZE" --objects "$(object_count "$MIXED_SIZE")" --concurrent "$2" \
     --get-distrib "$MIXED_GET" --stat-distrib "$MIXED_STAT" \
     --put-distrib "$MIXED_PUT" --delete-distrib "$MIXED_DELETE" \
-    --duration "$3"
+    --duration "$3" "${mixed_rps_flags[@]}"
 }
 
 record_environment "$variant" "$out" "$matrix"
@@ -89,13 +99,13 @@ for rep in $(seq 1 "$REPS"); do
   done
 
   for c in $MIXED_CONCURRENCY; do
-    mixed_cell "mixed-$MIXED_SIZE-c$c-r$rep" "$c" "$DURATION"
+    mixed_cell "mixed-$mixed_param-c$c-r$rep" "$c" "${MIXED_DURATION:-$DURATION}"
   done
 done
 
 if [[ -n ${LONG_MIXED_DURATION:-} ]]; then
   c=${MIXED_CONCURRENCY##* }
-  mixed_cell "longmixed-$MIXED_SIZE-c$c-r1" "$c" "$LONG_MIXED_DURATION"
+  mixed_cell "longmixed-$mixed_param-c$c-r1" "$c" "$LONG_MIXED_DURATION"
 fi
 
 # Leave the engine running for inspection; stop both with:

@@ -1,0 +1,60 @@
+{
+  "variant": "sw-tuned",
+  "size": "6MiB",
+  "size_bytes": 6291456,
+  "objects": 176,
+  "logical_bytes": 1107296256,
+  "filesystem": "ext4",
+  "empty": [
+    {
+      "drive": 1,
+      "used_bytes": 196608,
+      "apparent_bytes": 5261,
+      "inodes": 58
+    },
+    {
+      "drive": 2,
+      "used_bytes": 12288,
+      "apparent_bytes": 36,
+      "inodes": 2
+    },
+    {
+      "drive": 3,
+      "used_bytes": 12288,
+      "apparent_bytes": 36,
+      "inodes": 2
+    },
+    {
+      "drive": 4,
+      "used_bytes": 12288,
+      "apparent_bytes": 36,
+      "inodes": 2
+    }
+  ],
+  "full": [
+    {
+      "drive": 1,
+      "used_bytes": 830816256,
+      "apparent_bytes": 830536853,
+      "inodes": 76
+    },
+    {
+      "drive": 2,
+      "used_bytes": 440463360,
+      "apparent_bytes": 440406976,
+      "inodes": 11
+    },
+    {
+      "drive": 3,
+      "used_bytes": 421588992,
+      "apparent_bytes": 421532416,
+      "inodes": 11
+    },
+    {
+      "drive": 4,
+      "used_bytes": 522268672,
+      "apparent_bytes": 522196916,
+      "inodes": 14
+    }
+  ]
+}

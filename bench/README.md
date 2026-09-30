@@ -25,6 +25,7 @@ commands.
   - [Quick run](#quick-run)
   - [Full benchmark](#full-benchmark)
     - [Duration and disk space](#duration-and-disk-space)
+  - [Storage test](#storage-test)
   - [Configuration](#configuration)
     - [`bench/.env`](#benchenv)
     - [Matrix files](#matrix-files)
@@ -102,8 +103,9 @@ Each **test cell** is one warp run against a freshly started engine.
 |---|---|---|---|
 | **PUT** | Uploads new objects, each with a new name, as fast as possible (single-part) | Write speed | object size × concurrency |
 | **GET** | Uploads a set of objects, then downloads them repeatedly | Read speed and time to first byte | object size × concurrency |
-| **Mixed** | GET, HEAD, PUT and DELETE at the same time, in a set ratio | Behavior under realistic traffic | concurrency |
+| **Mixed** | GET, HEAD, PUT and DELETE at the same time, in a set ratio, at a fixed total request rate (`MIXED_RPS_LIMIT`) | Latency and CPU at a realistic load, rather than maximum throughput | concurrency |
 | **Long mixed** | Mixed workload for a long period (full matrix only) | Latency drift and background work (SeaweedFS vacuum, MinIO scanner) | once, only if `LONG_MIXED_DURATION` is set |
+| **Storage** (`storage.sh`, separate from the sweep) | Uploads a fixed set of objects, keeps them, and measures the drives | Disk space and inodes used per byte stored | object size |
 
 **Concurrency** is the number of requests in flight at once. Increasing it
 shows where each engine stops getting faster and latency starts climbing.
@@ -124,7 +126,7 @@ Per test cell and per operation:
 | **p50 / p99 / p99.9** | Latency (ms) that 50% / 99% / 99.9% of requests beat. The tail (p99, p99.9) is what users notice. |
 | **TTFB p99** | Time until the first byte of a GET response arrives |
 | **errors** | Failed requests |
-| **vs minio** | Ratio against MinIO for the same cell |
+| **vs minio** | Throughput and p99 compared with MinIO for the same cell, both as "N× faster" or "N× slower" (for p99, "2× faster" means half the latency). Differences under 5% show as "same". |
 
 Percentiles are computed exactly from every recorded request (warp `--full`),
 not approximated from warp's per-segment summaries.
@@ -151,7 +153,7 @@ Images used: `quay.io/minio/minio`, `chrislusf/seaweedfs`, `minio/warp`, set in
 
 ## Quick run
 
-The default matrix (`matrix.env`) gives a first impression in **about 12
+The default matrix (`matrix.env`) gives a first impression in **about 15
 minutes for all three variants**. It runs PUT and GET on small (4 KiB) and
 large (16 MiB) objects plus one mixed workload, at a single concurrency
 level (16), 15 seconds per test, once. It also checks that the harness works.
@@ -206,7 +208,9 @@ Run this on a machine shaped like production, not a laptop.
    from a separate machine.
 3. **Set the production traffic mix.** In `bench/matrix.full.env`, set
    `MIXED_GET`, `MIXED_STAT`, `MIXED_PUT`, `MIXED_DELETE` to production's
-   request ratio, and adjust `SIZES` to production's object sizes.
+   request ratio, `MIXED_RPS_LIMIT` to production's request rate (the
+   per-second rate of MinIO's `minio_s3_requests_total` metric at a busy
+   hour), and adjust `SIZES` to production's object sizes.
 4. **Run every variant** under the same run name, inside `tmux` or `screen`.
    It takes ~1½ hours for all three (see
    [Duration and disk space](#duration-and-disk-space)).
@@ -228,8 +232,8 @@ production-like server.
 
 | Matrix | Cells per variant | Per variant | All three |
 |---|---|---|---|
-| `matrix.env` (default) | 5 × 15 s | ~4 min | **~12 min** |
-| `matrix.small.env` (laptop) | 21 × 20 s | ~18 min | **~55 min** |
+| `matrix.env` (default) | 6 × 15 s + 1 × 1 min | ~5 min | **~15 min** |
+| `matrix.small.env` (laptop) | 18 × 20 s + 3 × 1 min | ~20 min | **~1 h** |
 | `matrix.full.env` | 25 × 1 min | ~45 min | **~2¼ h** |
 
 Besides the measured time, each cell spends time restarting the engine
@@ -267,6 +271,59 @@ docker compose -f bench/minio-compose.yml down
 docker compose -f bench/seaweedfs-compose.yml down
 ```
 
+## Storage test
+
+`storage.sh` measures storage efficiency: how much disk space and how many
+inodes each engine uses for the same data. It is separate from the sweep
+because it measures space, not speed, and needs the objects to stay on disk
+(warp deletes them at the end of every sweep cell).
+
+For each size in `STORAGE_SIZES` it resets the engine, measures the empty
+drives, uploads a fixed set of objects (single-part, like the PUT cells) with
+`warp get --noclear`, runs `sync`, and measures the drives again. The
+difference is what the objects cost. Both engines are configured to store
+data twice (`EC:2` on 4 drives, replication `001`), so **2.00× the data is
+the expected minimum**; anything above is overhead from how each engine lays
+objects out on disk.
+
+```bash
+export BENCH_RUN=$(date +%Y%m%d)
+for v in minio sw-tuned; do    # sw-minio-like stores data the same way as sw-tuned
+  bench/storage.sh "$v"
+done
+python3 bench/summarize.py "bench/results/$BENCH_RUN"
+```
+
+It takes a few minutes per variant: the uploads are ~20,000 small objects or
+up to 1 GiB per size. The results go into a "Storage used" table in
+`summary.md`, so it can share a `BENCH_RUN` with a sweep or have its own.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `STORAGE_SIZES` | 4KiB 128KiB 1MiB 6MiB 16MiB | Object sizes to measure |
+| `STORAGE_OBJECTS` | 20000 | Objects per size, capped by `STORAGE_MAX_BYTES` |
+| `STORAGE_MAX_BYTES` | 1 GiB | Caps objects × size, so large sizes upload quickly |
+| `STORAGE_CONCURRENCY` | 16 | Parallel uploads |
+
+What to expect: small objects are where the engines differ. MinIO keeps a
+directory and an `xl.meta` file per object on every drive, and each file takes
+at least one filesystem block, so a 4 KiB object costs several times its size
+and ~8 inodes. SeaweedFS appends objects to large volume files, so it stays
+close to 2× with almost no inodes per object. For multi-MiB objects the
+per-object overhead is negligible and both engines land at ~2×.
+
+Limits:
+
+- **Filesystem matters.** Block size and how directories are stored (ext4
+  gives every directory a 4 KiB block; XFS stores small ones in the inode)
+  change MinIO's small-object overhead. The table shows the filesystem; compare
+  runs on the same one.
+- **No deletes.** SeaweedFS reclaims deleted objects' space only when its
+  background vacuum runs, MinIO immediately. After heavy deletes SeaweedFS
+  temporarily uses more than this shows.
+- **Filer metadata is measured after `sync` with the engine running.**
+  SeaweedFS's metadata database may compact later and shrink slightly.
+
 ## Configuration
 
 ### `bench/.env`
@@ -293,7 +350,7 @@ Copy from `.env.example`. Read by both compose files and the scripts.
 
 ### Matrix files
 
-`matrix.env` (default, ~12 minutes), `matrix.small.env` (laptop, ~55 minutes)
+`matrix.env` (default, ~15 minutes), `matrix.small.env` (laptop, ~1 hour)
 and `matrix.full.env` (the real benchmark, ~2¼ hours) define what runs, for all
 three variants. Pass a matrix file as the second argument to `sweep.sh`;
 without one, `matrix.env` is used.
@@ -315,6 +372,8 @@ the only output worth keeping.
 | `MIXED_SIZE` | 1MiB | 1MiB | 1MiB | Object size in the mixed test |
 | `MIXED_CONCURRENCY` | 16 | 8 | 32 | Concurrency for mixed |
 | `MIXED_GET/STAT/PUT/DELETE` | 45/30/15/10 | 45/30/15/10 | 45/30/15/10 | Mixed request ratio. `DELETE` must be ≤ `PUT`. |
+| `MIXED_RPS_LIMIT` | 120 | 120 | 120 | Total requests per second for mixed, shared by all clients (warp `--rps-limit`). A stand-in until set to production's rate. Empty = unlimited. |
+| `MIXED_DURATION` | 1m | 1m | 1m | Length of each mixed test. Empty = `DURATION`. |
 | `LONG_MIXED_DURATION` | (empty = skip) | (empty = skip) | (empty = skip) | Long mixed run |
 
 Environment overrides for `sweep.sh`:
@@ -338,31 +397,47 @@ bench/results/<BENCH_RUN>/
     ├── <cell>.log                  # warp's console report
     ├── <cell>.cmd                  # exact warp command
     ├── <cell>.docker-stats.jsonl   # engine + warp CPU/memory, every 5s
-    └── <cell>.iostat.txt           # drive I/O stats, every 5s
+    ├── <cell>.iostat.txt           # drive I/O stats, every 5s
+    └── storage/                    # storage.sh only
+        ├── environment.txt, bench.env
+        ├── storage-<size>.json     # objects, bytes uploaded, drives before/after
+        └── storage-<size>.{log,cmd,csv.zst}   # warp upload
 ```
 
 Cells are named `<test>-<size>-c<concurrency>-r<rep>`, for example
-`put-4KiB-c16-r1`, `get-16MiB-c16-r1` or `mixed-1MiB-c16-r1`.
+`put-4KiB-c16-r1` or `get-16MiB-c16-r1`. Rate-limited mixed cells add the
+rate, for example `mixed-1MiB-rps120-c16-r1`, so they never mix with older
+unlimited runs.
 
 `summarize.py` with no argument picks the alphabetically last directory
 under `results/`, so pass the run directory explicitly.
 
 ## Reading the summary
 
-`summary.md` has one table per test and operation. The mixed test gets one
-table per operation it performs (GET, STAT, PUT, DELETE). For each size and
-concurrency there is a row per variant:
+`summary.md` has one table per test and operation. For each size and
+concurrency there is a row per variant. A mixed test run at a fixed rate
+(`MIXED_RPS_LIMIT`) gets its own section instead, since its throughput is set
+by the rate: one table with each variant's achieved rate, whether it kept up
+(at least 95% of the target), its engine CPU and errors, then one table of
+p50/p90/p99/p99.9 latency per operation (GET, STAT, PUT, DELETE). Engine CPU
+is every engine container together, averaged over the `docker stats` samples
+inside the measured window; 100% is one vCPU. `summary.csv` has it for every
+cell as `engine_cpu_pct`.
+
+A regular table looks like this:
 
 ```
-| param | conc | variant       | ops/s  | MiB/s | p50  | p99  | p99.9 | TTFB p99 | errors | ops/s vs minio | p99 vs minio |
-| 1MiB  | 32   | minio         | 2,374  | 2,374 | 12.1 | 30.2 | 55.0  | 29.8     | 0      |                |              |
-| 1MiB  | 32   | sw-minio-like | 3,100  | 3,100 | 9.0  | 25.1 | 80.3  | 24.0     | 0      | 1.31×          | 0.83×        |
+| object size | concurrency (clients) | variant       | throughput (ops/s) | throughput (MiB/s) | p50 (ms) | p99 (ms) | p99.9 (ms) | TTFB p99 (ms) | errors (count) | ops/s (% of minio) | p99 (% of minio) |
+| 1MiB        | 32                    | minio         | 2,374              | 2,374              | 12.1     | 30.2     | 55.0       | 29.8          | 0              |                    |                  |
+| 1MiB        | 32                    | sw-minio-like | 3,100              | 3,100              | 9.0      | 25.1     | 80.3       | 24.0          | 0              | 131%               | 83%              |
 ```
 
 (Illustrative numbers.)
 
-- **ops/s vs minio** above 1× means the variant is faster.
-- **p99 vs minio** below 1× means its tail latency is lower (better).
+- **ops/s (% of minio)** above 100% means the variant is faster: 131% is
+  1.31 times MinIO's throughput, i.e. 31% more.
+- **p99 (% of minio)** below 100% means its tail latency is lower (better):
+  83% is 17% less than MinIO's.
 - Values show `mean ± stdev` across reps. If the stdev is large relative to
   the difference between variants, the difference isn't meaningful. With
   `REPS=1` there is no stdev, so treat small differences as noise.
@@ -380,8 +455,15 @@ What to look at:
    where ops/s stops rising and p99 jumps is its practical limit.
 3. **Look at small objects and large objects separately.** SeaweedFS is built
    for many small files; MinIO for large objects.
-4. **Check p99.9 and errors**, not just averages.
-5. **Check `docker stats` and `iostat`** for cells with surprising results.
+4. **Read the mixed test by latency, not throughput.** With
+   `MIXED_RPS_LIMIT` set, every variant is asked for the same request rate, so
+   throughput should read "same" and the p50/p99 columns and `docker stats`
+   CPU are the comparison. If a variant's total throughput across the four
+   operations is clearly below the limit, it could not keep up: that engine
+   is saturated at this load, and its latency numbers mean the same as in an
+   unlimited run.
+5. **Check p99.9 and errors**, not just averages.
+6. **Check `docker stats` and `iostat`** for cells with surprising results.
    Disk `%util` near 100% means the drive, not the engine, set the limit.
 
 ## Troubleshooting
@@ -430,12 +512,13 @@ What to look at:
 | File | Purpose |
 |---|---|
 | `sweep.sh` | Runs the matrix for one variant |
+| `storage.sh` | Measures disk space and inodes used per byte stored, for one variant |
 | `lib.sh` | Shared helpers: engine reset, warp runs, metrics, environment capture |
 | `summarize.py` | Builds `summary.csv` and `summary.md` from a run |
 | `minio-compose.yml` | Single-node, 4-drive MinIO |
 | `seaweedfs-compose.yml` | SeaweedFS: master, 4 volume servers, filer with S3 |
-| `matrix.env` | Default matrix: first impression in ~12 minutes |
-| `matrix.small.env` | Laptop matrix: fewer cells, 3 reps, ~55 minutes for all three variants |
+| `matrix.env` | Default matrix: first impression in ~15 minutes |
+| `matrix.small.env` | Laptop matrix: fewer cells, 3 reps, ~1 hour for all three variants |
 | `matrix.full.env` | The real benchmark on the AWS server (~2¼ hours for all three variants) |
 | `.env.example` | Settings template |
 | `.env.m5d-xlarge` | Settings template for an EC2 `m5d.xlarge` benchmark server |

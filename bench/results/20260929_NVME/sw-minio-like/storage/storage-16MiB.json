@@ -1,0 +1,60 @@
+{
+  "variant": "sw-minio-like",
+  "size": "16MiB",
+  "size_bytes": 16777216,
+  "objects": 64,
+  "logical_bytes": 1073741824,
+  "filesystem": "xfs",
+  "empty": [
+    {
+      "drive": 1,
+      "used_bytes": 135168,
+      "apparent_bytes": 5264,
+      "inodes": 58
+    },
+    {
+      "drive": 2,
+      "used_bytes": 4096,
+      "apparent_bytes": 36,
+      "inodes": 2
+    },
+    {
+      "drive": 3,
+      "used_bytes": 4096,
+      "apparent_bytes": 36,
+      "inodes": 2
+    },
+    {
+      "drive": 4,
+      "used_bytes": 4096,
+      "apparent_bytes": 36,
+      "inodes": 2
+    }
+  ],
+  "full": [
+    {
+      "drive": 1,
+      "used_bytes": 1258487808,
+      "apparent_bytes": 855674174,
+      "inodes": 73
+    },
+    {
+      "drive": 2,
+      "used_bytes": 1258340352,
+      "apparent_bytes": 855645480,
+      "inodes": 17
+    },
+    {
+      "drive": 3,
+      "used_bytes": 251670528,
+      "apparent_bytes": 218105688,
+      "inodes": 5
+    },
+    {
+      "drive": 4,
+      "used_bytes": 251670528,
+      "apparent_bytes": 218105688,
+      "inodes": 5
+    }
+  ]
+}
