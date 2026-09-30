@@ -49,7 +49,7 @@ commands.
 |---|---|---|---|
 | Disk syncing (`fs.configure -fsync`) | set | not set (SeaweedFS default) | Meant to make SeaweedFS sync each write before replying. In 4.40 it has no effect on S3 PUTs, so in practice both variants reply before the OS flushes the write to disk. |
 | Volumes grown at once (`fs.configure -volumeGrowthCount`) | default | `SW_TUNED_GROWTH_COUNT` (8 physical = 4 replicated pairs) | Creates more writable volumes up front instead of stalling writes while growing a few at a time. |
-| S3 GET cache (`-s3.cacheCapacityMB`) | off | `SW_TUNED_CACHE_MB` (1024) | The S3 gateway serves repeated GETs of small objects from memory, skipping the volume server. Large (8 MiB) chunks are not cached. |
+| S3 GET cache (`-s3.cacheCapacityMB`) | off | `SW_TUNED_CACHE_MB` (1024) | The S3 gateway serves repeated GETs from memory instead of fetching chunks from the volume servers. A GET cell reads at most `GET_MAX_BYTES`, which can fit entirely in the cache, so `sw-tuned` GET results are a best case; data larger than the cache gets far fewer hits. |
 
 Tried and left out: `-saveToFilerLimit` (store small objects in the filer
 store) and `-maxMB` (chunk size) have no effect on S3 uploads in SeaweedFS
@@ -202,7 +202,9 @@ Run this on a machine shaped like production, not a laptop.
    On an EC2 `m5d.xlarge` (4 vCPUs, 16 GiB RAM, one 150 GB NVMe instance
    store — no 4-drive layout available), copy `bench/.env.m5d-xlarge`
    instead of `.env.example`; it has this single-disk caveat and the CPU
-   split for that instance's 2 physical cores already worked out.
+   split for that instance's 2 physical cores already worked out. Its
+   `DRIVE1`–`DRIVE4` currently point at the root gp3 EBS volume; swap in the
+   commented-out `/mnt/nvme1` paths to benchmark the instance-store NVMe.
 2. **Isolate the load generator.** Set `BENCH_CPUSET` to cores used by the
    engines only, and keep warp and other workloads off them. Ideally run warp
    from a separate machine.
@@ -285,6 +287,11 @@ difference is what the objects cost. Both engines are configured to store
 data twice (`EC:2` on 4 drives, replication `001`), so **2.00× the data is
 the expected minimum**; anything above is overhead from how each engine lays
 objects out on disk.
+
+The filesystem matters. MinIO keeps a directory and an `xl.meta` per object
+on every drive, and ext4 gives each directory a 4 KiB block where XFS does
+not, so small-object overhead differs between filesystems. Block allocation
+also counts toward disk used; the "file content ÷ data" column leaves it out.
 
 ```bash
 export BENCH_RUN=$(date +%Y%m%d)
